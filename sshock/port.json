@@ -1,0 +1,61 @@
+{
+    "version": 4,
+    "name": "sshock.zip",
+    "items": [
+        "SystemShock.sh",
+        "sshock"
+    ],
+    "items_opt": null,
+    "attr": {
+        "title": "System Shock",
+        "porter": [
+            "ricardo-ayres"
+        ],
+        "desc": "System Shock source port (Shockolate: https://github.com/Interrupt/systemshock) based on the GPL'd Mac sources.",
+        "desc_md": "System Shock source port ([Shockolate](https://github.com/Interrupt/systemshock)) based on the GPL'd Mac sources.",
+        "inst": "Copy the contents of the classic edition SSHOCK/DATA/ directory into res/data/ and run the game.",
+        "inst_md": "Copy the contents the classic edition SSHOCK/DATA/ directory into res/data/ and run the game.",
+        "genres": [
+            "fps"
+        ],
+        "image": {
+            "screenshot": "screenshot.png",
+            "covers": [
+                "cover.jpg"
+            ],
+            "thumbnail": null,
+            "video": null
+        },
+        "rtr": false,
+        "exp": false,
+        "runtime": [],
+        "store": [
+            {
+                "name": "GOG",
+                "gameurl": "https://www.gog.com/en/game/system_shock_enhanced_edition",
+                "developerurl": "https://web.archive.org/web/19980209132406/http://www.lglass.com/"
+            },
+            {
+                "name": "",
+                "gameurl": "",
+                "developerurl": ""
+            }
+        ],
+        "availability": "paid",
+        "reqs": [],
+        "arch": [
+            "aarch64"
+        ],
+        "min_glibc": ""
+    },
+    "status": {
+        "source": "Unknown",
+        "md5": null,
+        "status": "Installed"
+    },
+    "files": {
+        "port.json": "sshock/port.json",
+        "SystemShock.sh": "SystemShock.sh",
+        "sshock": "sshock"
+    }
+}
