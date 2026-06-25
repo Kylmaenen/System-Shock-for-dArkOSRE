@@ -44,6 +44,37 @@ CONFDIR="$GAMEDIR/conf/"
 echo "Detected rom directory: $directory"
 echo "Game directory: $GAMEDIR"
 
+restore_system_audio() {
+  echo "Restoring system audio after System Shock exit"
+
+  # Shockolate owns the ALSA device while running. If PortMaster kills the
+  # process, dArkOSRE can occasionally keep the system audio stack muted/stale.
+  sleep 1
+
+  if command -v systemctl >/dev/null 2>&1; then
+    for svc in pulseaudio.service reset-alsa.service alsa-restore.service; do
+      if systemctl list-unit-files "$svc" >/dev/null 2>&1 || systemctl status "$svc" >/dev/null 2>&1; then
+        echo "Restarting $svc"
+        $ESUDO systemctl restart "$svc" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+
+  if command -v pulseaudio >/dev/null 2>&1; then
+    ARK_UID="$(id -u ark 2>/dev/null || echo 1000)"
+    mkdir -p "/run/user/${ARK_UID}" 2>/dev/null || true
+    $ESUDO chown ark:ark "/run/user/${ARK_UID}" 2>/dev/null || true
+    $ESUDO chmod 700 "/run/user/${ARK_UID}" 2>/dev/null || true
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -u ark env XDG_RUNTIME_DIR="/run/user/${ARK_UID}" pulseaudio --start >/dev/null 2>&1 || true
+    else
+      XDG_RUNTIME_DIR="/run/user/${ARK_UID}" pulseaudio --start >/dev/null 2>&1 || true
+    fi
+  fi
+
+  $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
+}
+
 # Ensure the conf directory exists
 mkdir -p "$GAMEDIR/conf"
 
@@ -121,6 +152,9 @@ echo "Final LD_PRELOAD=$LD_PRELOAD"
 
 # Now we launch the port's executable with multiarch support. Make sure to rename your file according to the architecture you built for. E.g. portexecutable.aarch64
 ./sshock.${DEVICE_ARCH} -f # Launch the executable
+
+# Restore audio before the generic PortMaster cleanup.
+restore_system_audio
 
 # Cleanup any running gptokeyb instances, and any platform specific stuff.
 pm_finish
