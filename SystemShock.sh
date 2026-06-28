@@ -6,10 +6,13 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BOOT_LOG="${SCRIPT_DIR}/sshock/log.txt"
 mkdir -p "$(dirname "$BOOT_LOG")"
-exec > >(tee "$BOOT_LOG") 2>&1
+: > "$BOOT_LOG"
+exec >> "$BOOT_LOG" 2>&1
 
 echo "Starting System Shock launcher: $(date)"
+
 echo "Script directory: $SCRIPT_DIR"
+
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
@@ -43,7 +46,6 @@ CONFDIR="$GAMEDIR/conf/"
 
 echo "Detected rom directory: $directory"
 echo "Game directory: $GAMEDIR"
-
 restore_system_audio() {
   echo "Restoring system audio after System Shock exit"
 
@@ -75,28 +77,46 @@ restore_system_audio() {
   $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
 }
 
+CPU_GOVERNOR_STATE="$CONFDIR/cpu-governors.before"
+
+enable_performance_mode() {
+  : > "$CPU_GOVERNOR_STATE"
+
+  for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [ -r "$governor" ] || continue
+
+    current="$(cat "$governor" 2>/dev/null)"
+    [ -n "$current" ] || continue
+    printf '%s\t%s\n' "$governor" "$current" >> "$CPU_GOVERNOR_STATE"
+
+    available="$(cat "$(dirname "$governor")/scaling_available_governors" 2>/dev/null)"
+    case " $available " in
+      *" performance "*)
+        printf '%s' performance | $ESUDO tee "$governor" >/dev/null 2>&1 || true
+        ;;
+    esac
+  done
+}
+
+restore_cpu_governors() {
+  [ -f "$CPU_GOVERNOR_STATE" ] || return
+
+  while IFS="$(printf '\t')" read -r governor previous; do
+    case "$governor" in
+      /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
+        [ -n "$previous" ] && printf '%s' "$previous" | $ESUDO tee "$governor" >/dev/null 2>&1 || true
+        ;;
+    esac
+  done < "$CPU_GOVERNOR_STATE"
+
+  rm -f "$CPU_GOVERNOR_STATE"
+}
+
 # Ensure the conf directory exists
 mkdir -p "$GAMEDIR/conf"
 
 # Switch to the game directory
 cd "$GAMEDIR" || exit 1
-
-if [ -f "$GAMEDIR/probe.once" ]; then
-  rm -f "$GAMEDIR/probe.once"
-  export LD_LIBRARY_PATH="$GAMEDIR/libs.${DEVICE_ARCH}:$LD_LIBRARY_PATH"
-  unset LD_PRELOAD
-  unset SDL_AUDIODRIVER
-  unset SDL_RENDER_DRIVER
-  unset SDL_VIDEO_GL_DRIVER
-  unset SDL_VIDEO_EGL_DRIVER
-  unset SHOCKOLATE_RENDER_DRIVER
-  chmod +x "$GAMEDIR/sdlprobe.${DEVICE_ARCH}" 2>/dev/null
-  echo "Running one-shot SDL video probe"
-  "$GAMEDIR/sdlprobe.${DEVICE_ARCH}"
-  echo "SDL video probe finished with exit code $?"
-  pm_finish
-  exit 0
-fi
 
 # Some ports like to create save files or settings files in the user's home folder or other locations. We map these config folders so we can either preconfigure games and or have the savefiles in one place. I
 # You can either use XDG variables to redirect the Ports to our gamefolder if the port supports it:
@@ -114,7 +134,12 @@ export XDG_DATA_HOME="$CONFDIR"
 
 if [ -f "$CONFDIR/Interrupt/SystemShock/prefs.txt" ]; then
   sed -i 's/^use-opengl = .*/use-opengl = no/' "$CONFDIR/Interrupt/SystemShock/prefs.txt"
+  sed -i 's/^music-volume = .*/music-volume = 100/' "$CONFDIR/Interrupt/SystemShock/prefs.txt"
+  sed -i 's/^midi-backend = .*/midi-backend = 2/' "$CONFDIR/Interrupt/SystemShock/prefs.txt"
+  sed -i 's/^midi-output = .*/midi-output = 0/' "$CONFDIR/Interrupt/SystemShock/prefs.txt"
 fi
+
+enable_performance_mode
 
 # We launch gptokeyb using this $GPTOKEYB variable as it will take care of sourcing the executable from the central location,
 # assign the appropriate exit hotkey dependent on the device (ex. select + start for most devices and minus + start for the 
@@ -124,10 +149,7 @@ fi
 # For a proper documentation how gptokeyb works: [Link](https://github.com/PortsMaster/gptokeyb)
 # Ensure HOTKEY is unset, it should default to select
 export HOTKEY="select"
-$GPTOKEYB2 "sshock.${DEVICE_ARCH}" -c "./sshock.ini" &
-
-# Do some platform specific stuff right before the port is launched but after GPTOKEYB is run.
-pm_platform_helper "$GAMEDIR/sshock.${DEVICE_ARCH}"
+$GPTOKEYB2 "sshock.${DEVICE_ARCH}" -c "./sshock.ini" >/dev/null 2>&1 &
 
 # dArkOSRE/RK3326 creates KMSDRM windows only when SDL is pointed at the
 # system GLES/EGL libraries and Shockolate's desktop GL profile is forced to ES.
@@ -135,11 +157,21 @@ export SDL_VIDEODRIVER=kmsdrm
 export SDL_RENDER_DRIVER=opengles2
 export SDL_VIDEO_GL_DRIVER=libGLESv2.so
 export SDL_VIDEO_EGL_DRIVER=libEGL.so
-export SDL_AUDIO_ALSA_SET_BUFFER_SIZE=1
+unset SDL_AUDIO_ALSA_SET_BUFFER_SIZE
+export SDL_AUDIO_FREQUENCY=44100
+export SHOCK_AUDIO_RATE=44100
+# FluidSynth can keep up without the 128 ms mixer block previously needed by
+# ADLMIDI. A short block prevents Mix_PlayChannel from stalling the game when
+# an SFX starts.
+export SHOCK_AUDIO_CHUNK=512
 export SHOCK_SDL_FORCE_GLES=1
 export SHOCK_SDL_FORCE_RENDERER=opengles2
-export LD_LIBRARY_PATH="$GAMEDIR/libs.${DEVICE_ARCH}:$LD_LIBRARY_PATH"
-export LD_PRELOAD="$GAMEDIR/libshock-sdlshim.${DEVICE_ARCH}.so"
+SHOCK_LD_PRELOAD="$GAMEDIR/libshock-sdlshim.${DEVICE_ARCH}.so"
+
+pm_platform_helper "$GAMEDIR/sshock.${DEVICE_ARCH}"
+
+# Apply the Shockolate-only shim immediately before launch.
+export LD_PRELOAD="$SHOCK_LD_PRELOAD"
 
 echo "Final SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
 echo "Final SDL_RENDER_DRIVER=$SDL_RENDER_DRIVER"
@@ -147,14 +179,32 @@ echo "Final SDL_VIDEO_GL_DRIVER=$SDL_VIDEO_GL_DRIVER"
 echo "Final SDL_VIDEO_EGL_DRIVER=$SDL_VIDEO_EGL_DRIVER"
 echo "Final SDL_AUDIODRIVER=$SDL_AUDIODRIVER"
 echo "Final SDL_AUDIO_ALSA_SET_BUFFER_SIZE=$SDL_AUDIO_ALSA_SET_BUFFER_SIZE"
-echo "Final LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "Final SDL_AUDIO_FREQUENCY=$SDL_AUDIO_FREQUENCY"
+echo "Final SHOCK_AUDIO_RATE=$SHOCK_AUDIO_RATE"
+echo "Final SHOCK_AUDIO_CHUNK=$SHOCK_AUDIO_CHUNK"
 echo "Final LD_PRELOAD=$LD_PRELOAD"
 
 # Now we launch the port's executable with multiarch support. Make sure to rename your file according to the architecture you built for. E.g. portexecutable.aarch64
-./sshock.${DEVICE_ARCH} -f # Launch the executable
+if command -v nice >/dev/null 2>&1; then
+  echo "Launching System Shock with nice -n -5"
+  nice -n -5 ./sshock.${DEVICE_ARCH} -f >/dev/null 2>&1 # Launch the executable
+else
+  echo "Launching System Shock without nice"
+  ./sshock.${DEVICE_ARCH} -f >/dev/null 2>&1 # Launch the executable
+fi
+GAME_STATUS=$?
+echo "System Shock exited with code $GAME_STATUS"
+
+restore_cpu_governors
+
+# Keep Shockolate-only runtime hooks away from system cleanup commands.
+unset LD_PRELOAD
+unset SDL_VIDEODRIVER SDL_RENDER_DRIVER SDL_VIDEO_GL_DRIVER SDL_VIDEO_EGL_DRIVER
+unset SHOCK_SDL_FORCE_GLES SHOCK_SDL_FORCE_RENDERER
 
 # Restore audio before the generic PortMaster cleanup.
 restore_system_audio
 
 # Cleanup any running gptokeyb instances, and any platform specific stuff.
 pm_finish
+echo "Launcher cleanup complete"
